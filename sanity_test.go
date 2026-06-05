@@ -49,7 +49,7 @@ func TestBasicFunction(t *testing.T) {
 		t.Error(err)
 	}
 
-	transactions, directives := f.T, f.D
+	transactions, directives := f.Transactions(), f.Directives()
 
 	if len(directives) != 1 {
 		t.Fatalf("Incorrect number of directives: %v", len(directives))

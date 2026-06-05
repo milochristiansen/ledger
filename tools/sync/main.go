@@ -81,15 +81,15 @@ func main() {
 
 		// Find the ID/RID of the first transaction
 		tf := &ledger.File{}
-		if len(cf.T) > 0 {
-			cid, ok := cf.T[0].KVPairs["ID"]
+		ct := cf.Transactions()
+		if len(ct) > 0 {
+			cid, ok := ct[0].KVPairs["ID"]
 			if !ok {
 				fmt.Fprintln(os.Stderr, "Missing ID on first transaction of sent data.")
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-
-			crid, ok := cf.T[0].KVPairs["RID"]
+			crid, ok := ct[0].KVPairs["RID"]
 			if !ok {
 				fmt.Fprintln(os.Stderr, "Missing RID on first transaction of sent data.")
 				w.WriteHeader(http.StatusBadRequest)

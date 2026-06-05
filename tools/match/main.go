@@ -40,8 +40,13 @@ func main() {
 	src := tools.LoadLedgerFile(fs.SourceFile)
 
 	matchers := tools.LoadMatchFile(fs.MatchFile)
-
-	dst := &ledger.File{D: nil, T: src.Matched(fs.AccountName, matchers)}
+	matched := tools.MatchedTransactions(src, fs.AccountName, matchers)
+	entries := make([]ledger.Entry, len(matched))
+	for i := range matched {
+		t := matched[i]
+		entries[i] = &t
+	}
+	dst := &ledger.File{Entries: entries}
 
 	tools.WriteLedgerFile(fs.DestFile, dst)
 }

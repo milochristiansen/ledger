@@ -36,7 +36,7 @@ var defaultAccount string = "Unknown:Account"
 //
 // This function makes a lot of assumptions about the structure of the input OFX file, and will error out if
 // they are not met.
-func FromOFX(file io.Reader, mainAccount string, matchers []ledger.Matcher) *ledger.File {
+func FromOFX(file io.Reader, mainAccount string, matchers []Matcher) *ledger.File {
 	// Load OFX file
 	ofxd := HandleErrV(ofxgo.ParseResponse(file))
 
@@ -56,8 +56,8 @@ func FromOFX(file io.Reader, mainAccount string, matchers []ledger.Matcher) *led
 			Date:        str.DtPosted.Time,
 			Status:      ledger.StatusClear,
 			KVPairs: map[string]string{
-				"ID":     <-ledger.IDService,
-				"RID":    <-ledger.IDService,
+				"ID":     <-IDService,
+				"RID":    <-IDService,
 				"FITID":  string(str.FiTID),
 				"TrnTyp": str.TrnType.String(),
 				"Memo":   string(str.Memo),
@@ -75,9 +75,15 @@ func FromOFX(file io.Reader, mainAccount string, matchers []ledger.Matcher) *led
 			},
 		}
 
-		tr.Match(defaultAccount, matchers)
+		MatchTransaction(&tr, defaultAccount, matchers)
 
 		trs = append(trs, tr)
 	}
-	return &ledger.File{T: trs, D: nil}
+
+	entries := make([]ledger.Entry, len(trs))
+	for i := range trs {
+		t := trs[i]
+		entries[i] = &t
+	}
+	return &ledger.File{Entries: entries}
 }

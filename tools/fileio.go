@@ -55,7 +55,7 @@ func WriteLedgerFile(path string, d *ledger.File) {
 
 // LoadMatchFile loads a csv match file and parses it into a list of Matchers. On any error the message is logged to
 // standard error and the program exits with code 1.
-func LoadMatchFile(path string) []ledger.Matcher {
+func LoadMatchFile(path string) []Matcher {
 	mr := HandleErrV(os.Open(path))
 	defer mr.Close()
 
@@ -63,7 +63,7 @@ func LoadMatchFile(path string) []ledger.Matcher {
 	mrdr.FieldsPerRecord = 3
 	mrdr.Comment = '#'
 
-	matchers := []ledger.Matcher{}
+	matchers := []Matcher{}
 	for {
 		line, err := mrdr.Read()
 		if err == io.EOF {
@@ -73,7 +73,7 @@ func LoadMatchFile(path string) []ledger.Matcher {
 
 		reg := HandleErrV(regexp.Compile(line[0]))
 
-		matchers = append(matchers, ledger.Matcher{
+		matchers = append(matchers, Matcher{
 			R:       reg,
 			Account: line[1],
 			Payee:   line[2],

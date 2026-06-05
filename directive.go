@@ -30,12 +30,13 @@ import (
 
 // Directive is a simple type to represent a partially parsed, but not validated, command directive.
 type Directive struct {
-	Type        string       // The keyword that starts the directive.
-	Argument    string       // Any remaining content that was on the first line of the directive.
-	Lines       []string     // Subsequent indented lines. Stored here unparsed.
-	FoundBefore int          // The transaction index this directive precedes.
-	Location    lex.Location // Line number this directive begins at.
+	Type     string       // The keyword that starts the directive.
+	Argument string       // Any remaining content that was on the first line of the directive.
+	Lines    []string     // Subsequent indented lines. Stored here unparsed.
+	Location lex.Location // Line number this directive begins at.
 }
+
+func (d *Directive) entryType() {}
 
 func (d *Directive) String() string {
 	buf := new(bytes.Buffer)

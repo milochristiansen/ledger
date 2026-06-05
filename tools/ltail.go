@@ -24,41 +24,35 @@ package tools
 
 import "github.com/milochristiansen/ledger"
 
-// LTail tails a ledger file based on a ID and RID. There are no error cases (if the ID doesn't exist you just get an empty file)
+// LTail tails a ledger file based on a ID and RID. There are no error cases
+// (if the ID doesn't exist you just get an empty file).
 func LTail(f *ledger.File, id, rid string) *ledger.File {
-	// Go through the transactions *in reverse* looking for the ID (and also the revision ID if specified)
-	i := len(f.T) - 1
-	for ; i >= 0; i-- {
-		if fid, ok := f.T[i].KVPairs["ID"]; ok && fid == id {
+	// Find the transaction with the given ID/RID, searching in reverse.
+	cutAfter := -1
+	for i := len(f.Entries) - 1; i >= 0; i-- {
+		tp, ok := f.Entries[i].(*ledger.Transaction)
+		if !ok {
+			continue
+		}
+		if fid, ok := tp.KVPairs["ID"]; ok && fid == id {
 			if rid != "" {
-				if frid, ok := f.T[i].KVPairs["RID"]; ok && frid == rid {
+				if frid, ok := tp.KVPairs["RID"]; ok && frid == rid {
+					cutAfter = i
 					break
 				}
 				continue
 			}
+			cutAfter = i
 			break
 		}
 	}
 
-	// slice the transaction list to remove everything before that point.
-	rtrs := f.T[i:]
-
-	// Now drop all the directives that come before the selected transaction
-	rdrs := f.D
-	if len(f.D) > 0 {
-		j := 0
-		for ; j < len(f.D); j++ {
-			if f.D[j].FoundBefore > i {
-				break
-			}
-		}
-		rdrs = f.D[j:]
-
-		// Adjust FoundBefore values
-		for k := range rdrs {
-			rdrs[k].FoundBefore -= i
-		}
+	// Everything from cutAfter onward (inclusive) is kept.
+	var entries []ledger.Entry
+	if cutAfter >= 0 {
+		entries = make([]ledger.Entry, len(f.Entries)-cutAfter)
+		copy(entries, f.Entries[cutAfter:])
 	}
 
-	return &ledger.File{T: rtrs, D: rdrs}
+	return &ledger.File{Entries: entries}
 }

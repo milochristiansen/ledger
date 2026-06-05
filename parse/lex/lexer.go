@@ -243,9 +243,6 @@ func (l Location) L(i uint64) Location {
 // C is a composite constructor for a location, setting the column part. If you pass in an integer that is
 // too large to fit the 16 bit storage area, 0 will be used instead.
 func (l Location) C(i uint16) Location {
-	if (uint64(i)<<48)&0x0000ffffffffffff != 0 {
-		i = 0
-	}
 	l = l & 0x0000ffffffffffff
 	l = l | (Location(i) << 48)
 	return l
@@ -254,11 +251,11 @@ func (l Location) C(i uint16) Location {
 // LPlus increments the line portion of a Location and returns the result.
 func (l Location) LPlus() Location {
 	i := l.Line()
-	return l.L(i)
+	return l.L(i + 1)
 }
 
 // CPlus increments the column portion of a Location and returns the result.
 func (l Location) CPlus() Location {
 	i := l.Column()
-	return l.C(i)
+	return l.C(i + 1)
 }

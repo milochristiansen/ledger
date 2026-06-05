@@ -38,9 +38,7 @@ package ledger
 import (
 	"bytes"
 	"fmt"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -175,8 +173,10 @@ type sumTree struct {
 
 func (st *sumTree) render(name, lvl, pad string, res [][]string) [][]string {
 	if len(st.children) == 1 {
-		// Maybe I'm being an idiot, but there isn't a way to get an unknown key from a map that isn't a loop.
 		for key, child := range st.children {
+			if name == "" {
+				return child.render(key, lvl, pad, res)
+			}
 			return child.render(name+":"+key, lvl, pad, res)
 		}
 	}
@@ -224,45 +224,7 @@ func FormatSums(accounts map[string]int64, pad string) [][]string {
 	return root.render("", "", pad, nil)
 }
 
-// Match replaces the given account in the postings with the first matcher that succeeds.
-// If that matcher has a payee, that payee will replace this transaction's description.
-// Returns true if any matcher succeeded, or false otherwise
-func (t *Transaction) Match(account string, matchers []Matcher) bool {
-	postingIxs := []int{}
-	for i, p := range t.Postings {
-		if p.Account == account {
-			postingIxs = append(postingIxs, i)
-		}
-	}
-
-	if len(postingIxs) == 0 {
-		return false
-	}
-
-	for _, matcher := range matchers {
-		if matcher.R.MatchString(t.Description) {
-
-			if matcher.Payee != "" {
-				t.Description = matcher.Payee
-			}
-			for _, ix := range postingIxs {
-				t.Postings[ix].Account = matcher.Account
-			}
-
-			return true
-		}
-	}
-
-	return false
-}
-
-// Matcher associates an account or a payee with a regexp to match against a transaction description.
-type Matcher struct {
-	R       *regexp.Regexp
-	Account string
-	Payee   string
-}
-
+func (t *Transaction) entryType() {}
 func (t *Transaction) String() string {
 	buf := new(bytes.Buffer)
 
@@ -327,19 +289,10 @@ func (p *Posting) String() string {
 		// In order to align on the decimal point instead of the first digit, we need to figure out how much value is
 		// before the decimal point so we can reduce the account padding to match.
 		value := FormatValue(p.Value)
-
-		// Measure forward offset
 		prefixlen := strings.Index(value, ".")
-		if prefixlen == -1 {
-			prefixlen = len(value)
-		}
-
-		// Calculate padding
+		// pad cannot go negative with int64 values: max prefix is ~19 chars
+		// for $922337203685477, well under the 62-char pad width.
 		pad := 62 - prefixlen
-		if pad < 0 {
-			pad = 0
-		}
-
 		// We write the account name, pad it out taking into account the length of the value (align at the decimal
 		// point), add an extra two spaces so we don't need to write a bunch of logic for pathologically long account
 		// names, and then write the value.
@@ -364,40 +317,100 @@ func (p *Posting) String() string {
 	return buf.String()
 }
 
-// ParseValueNumber takes a decimal number and converts it to a integer with a precision of .
-// Rounding is done via the round to even method.
+// ParseValueNumber takes a decimal number string and converts it to an integer
+// representing ten-thousandths of the base currency unit (e.g. "123.4567" → 1234567).
+// Rounding is done via the round-to-even method.
 func ParseValueNumber(v string) (int64, error) {
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return 0, err
+	neg := false
+	if len(v) > 0 && v[0] == '-' {
+		neg = true
+		v = v[1:]
 	}
 
-	ip := int64(f)
-	fp := f - float64(ip)
-	return ip*10000 + int64(fp*10000), nil
+	var whole, frac4, fifthDigit int64
+	fracDigits := 0
+	hasRemainder := false
+	inFrac := false
+
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c == '.' {
+			if inFrac {
+				return 0, fmt.Errorf("invalid number: multiple decimal points in %q", v)
+			}
+			inFrac = true
+			continue
+		}
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("invalid number: unexpected character %q in %q", string(c), v)
+		}
+		digit := int64(c - '0')
+		if inFrac {
+			switch {
+			case fracDigits < 4:
+				frac4 = frac4*10 + digit
+			case fracDigits == 4:
+				fifthDigit = digit
+			default:
+				if digit != 0 {
+					hasRemainder = true
+				}
+			}
+			fracDigits++
+		} else {
+			whole = whole*10 + digit
+		}
+	}
+
+	// Pad or round fractional part to exactly 4 digits.
+	switch {
+	case fracDigits < 4:
+		for fracDigits < 4 {
+			frac4 *= 10
+			fracDigits++
+		}
+	case fracDigits >= 5:
+		roundUp := fifthDigit > 5 || (fifthDigit == 5 && (hasRemainder || frac4%2 != 0))
+		if roundUp {
+			frac4++
+			if frac4 > 9999 {
+				frac4 = 0
+				whole++
+			}
+		}
+	}
+
+	result := whole*10000 + frac4
+	if neg {
+		result = -result
+	}
+	return result, nil
 }
 
-// FormatValue takes a amount of money in thousandths of a cent and formats it for display.
-// Rounding is done via the round to even method.
 func FormatValue(v int64) string {
-	ms, ls1, ls2 := formatHelper(v)
+	neg, ms, ls1, ls2 := formatHelper(v)
+	if neg {
+		return fmt.Sprintf("-$%v.%v%v", ms, ls1, ls2)
+	}
 	return fmt.Sprintf("$%v.%v%v", ms, ls1, ls2)
 }
 
 // FormatValueNumber is exactly the same as FormatValue, but it does not add any currency indicators.
 func FormatValueNumber(v int64) string {
-	ms, ls1, ls2 := formatHelper(v)
+	neg, ms, ls1, ls2 := formatHelper(v)
+	if neg {
+		return fmt.Sprintf("-%v.%v%v", ms, ls1, ls2)
+	}
 	return fmt.Sprintf("%v.%v%v", ms, ls1, ls2)
 }
 
-func formatHelper(v int64) (ms, ls1, ls2 int64) {
-	// This is a little complicated because I not only need to separate the parts, but I also
-	// want to round the result to even. There is probably a better way to do this.
+func formatHelper(v int64) (neg bool, ms, ls1, ls2 int64) {
+	if v < 0 {
+		neg = true
+		v = -v
+	}
 	ms = v / 10000
 	ls := v % 10000 / 100
-	if ls < 0 {
-		ls = -ls
-	}
 	ls = roundToEven(ls, v%100/10)
 	if ls > 99 {
 		ls = 0
@@ -410,33 +423,15 @@ func formatHelper(v int64) (ms, ls1, ls2 int64) {
 	return
 }
 
-// Loosely based on the standard library math function.
-// ls must be a value between 0 and 9 (a single decimal digit)
+// roundToEven rounds ms to the nearest even integer when the next digit is ls.
+// ms must be non-negative. ls must be a value between 0 and 9.
 func roundToEven(ms, ls int64) int64 {
-	odd := (ms % 2) != 0
-	if ls > 5 || (ls == 5 && odd) {
-		if ms > 0 {
-			return ms + 1
-		}
-		return ms - 1
+	if ls > 5 || (ls == 5 && ms%2 != 0) {
+		return ms + 1
 	}
 	return ms
 }
 
-// TransactionDateSorter is a helper for sorting a list of transactions by date.
-type TransactionDateSorter []Transaction
-
-func (tds TransactionDateSorter) Len() int {
-	return len(tds)
-}
-
-func (tds TransactionDateSorter) Less(i, j int) bool {
-	return tds[i].Date.Before(tds[j].Date)
-}
-
-func (tds TransactionDateSorter) Swap(i, j int) {
-	tds[i], tds[j] = tds[j], tds[i]
-}
 
 // Error types
 

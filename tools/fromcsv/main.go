@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/milochristiansen/ledger"
+	"github.com/milochristiansen/ledger/tools"
 )
 
 var usage string = `Usage: fromcsv [-o <dest>]|[-output <dest>] options... <src>
@@ -272,8 +273,8 @@ func main() {
 			Date:        date,
 			Status:      ledger.StatusClear,
 			KVPairs: map[string]string{
-				"ID":  <-ledger.IDService,
-				"RID": <-ledger.IDService,
+				"ID":  <-tools.IDService,
+				"RID": <-tools.IDService,
 			},
 			Postings: []ledger.Posting{
 				{
@@ -289,9 +290,10 @@ func main() {
 		trs = append(trs, tr)
 	}
 
-	err = (&ledger.File{T: trs, D: nil}).Format(outFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to write ledger data: %v\n", err)
-		os.Exit(1)
+	entries := make([]ledger.Entry, len(trs))
+	for i := range trs {
+		t := trs[i]
+		entries[i] = &t
 	}
+	err = (&ledger.File{Entries: entries}).Format(outFile)
 }

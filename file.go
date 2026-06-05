@@ -23,52 +23,50 @@ misrepresented as being the original software.
 package ledger
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/milochristiansen/ledger/parse/lex"
 )
 
-// File hold a parsed ledger file stored as lists of Directives and Transactions.
-type File struct {
-	T []Transaction
-	D []Directive
+// Entry is a single element in a ledger file — either a *Transaction or a *Directive.
+type Entry interface {
+	String() string
+	entryType() // sealed: only Transaction and Directive implement this
 }
 
-// ErrImproperInterleave is returned by File.Format if the lists do not interleave properly.
-// Caused by bad FoundBefore values in the directives.
-var ErrImproperInterleave = errors.New("Ledger file transaction and directive lists do not interleave properly.")
+// File holds a parsed ledger file as an ordered list of entries.
+type File struct {
+	Entries []Entry // each element is *Transaction or *Directive
+}
 
-// Format writes out a ledger file, interleaving the transactions and directives according to the
-// "FoundBefore" values in the directives. The directive list is sorted on the FoundBefore values as
-// part of this operation.
+// Transactions returns all transaction entries in file order.
+func (f *File) Transactions() []Transaction {
+	var ts []Transaction
+	for _, e := range f.Entries {
+		if t, ok := e.(*Transaction); ok {
+			ts = append(ts, *t)
+		}
+	}
+	return ts
+}
+
+// Directives returns all directive entries in file order.
+func (f *File) Directives() []Directive {
+	var ds []Directive
+	for _, e := range f.Entries {
+		if d, ok := e.(*Directive); ok {
+			ds = append(ds, *d)
+		}
+	}
+	return ds
+}
+
+// Format writes out a ledger file from the entries in order.
 func (f *File) Format(w io.Writer) error {
-	// Use a stable sort to be minimally disruptive.
-	sort.SliceStable(f.D, func(i, j int) bool {
-		return f.D[i].FoundBefore < f.D[j].FoundBefore
-	})
-
-	ctr, cdr := 0, 0
-	for ctr < len(f.T) || cdr < len(f.D) {
-		// If we have remaining directives and the next directive goes before the current transaction
-		if cdr < len(f.D) && f.D[cdr].FoundBefore == ctr {
-			fmt.Fprintf(w, "\n%v", f.D[cdr].String())
-			cdr++
-			continue
-		}
-
-		// If we have remaining directives and we are out of transactions
-		if ctr >= len(f.T) {
-			return ErrImproperInterleave
-		}
-
-		// Write next transaction
-		fmt.Fprintf(w, "\n%v", f.T[ctr].String())
-		ctr++
+	for _, e := range f.Entries {
+		fmt.Fprintf(w, "\n%v", e.String())
 	}
 	return nil
 }
@@ -83,20 +81,19 @@ func (err ErrMalformedAccountName) Error() string {
 	return fmt.Sprintf("Malformed account name (%s) at %s", err.Name, err.Location)
 }
 
-// Accounts returns a slice of all account directives, in the order they are found in D.
+// Accounts returns a slice of all account directives, in file order.
 // If any account directives fail to parse, Accounts returns an error.
 func (f *File) Accounts() ([]Account, error) {
 	accts := []Account{}
-	for dIx, d := range f.D {
-		if d.Type != "account" {
+	for _, e := range f.Entries {
+		d, ok := e.(*Directive)
+		if !ok || d.Type != "account" {
 			continue
 		}
 
 		acct := Account{
-			Name:           d.Argument,
-			FoundBefore:    d.FoundBefore,
-			Location:       d.Location,
-			DirectiveIndex: dIx,
+			Name:     d.Argument,
+			Location: d.Location,
 		}
 
 		// filter out some things that cause funny behavior
@@ -104,17 +101,15 @@ func (f *File) Accounts() ([]Account, error) {
 			return nil, ErrMalformedAccountName{acct.Name, acct.Location}
 		}
 
-		for sdIx, sd := range d.Lines {
+		for sdiIx, sd := range d.Lines {
 			if strings.HasPrefix(sd, "default") {
-				// ledger is lax about directive parsing
 				acct.Default = true
 			} else if strings.HasPrefix(sd, "alias") {
 				alias := strings.TrimSpace(sd[len("alias"):])
-				// filter out some things that cause funny behavior
 				if strings.Contains(alias, "  ") || strings.ContainsAny(alias, ";\t") {
 					return nil, ErrMalformedAccountName{
 						Name:     alias,
-						Location: acct.Location.L(acct.Location.Line() + uint64(sdIx)),
+						Location: acct.Location.L(acct.Location.Line() + uint64(sdiIx)),
 					}
 				}
 				acct.Aliases = append(acct.Aliases, alias)
@@ -132,20 +127,18 @@ func (f *File) Accounts() ([]Account, error) {
 	return accts, nil
 }
 
-// Payees returns a slice of all payee directives, in the order they are found in D.
-// if any payee directives fail to parse, Payees returns an error.
+// Payees returns a slice of all payee directives, in file order.
 func (f *File) Payees() ([]Payee, error) {
 	payees := []Payee{}
-	for dIx, d := range f.D {
-		if d.Type != "account" {
+	for _, e := range f.Entries {
+		d, ok := e.(*Directive)
+		if !ok || d.Type != "account" {
 			continue
 		}
 
 		payee := Payee{
-			Name:           d.Argument,
-			FoundBefore:    d.FoundBefore,
-			Location:       d.Location,
-			DirectiveIndex: dIx,
+			Name:     d.Argument,
+			Location: d.Location,
 		}
 
 		for _, sd := range d.Lines {
@@ -163,8 +156,7 @@ func (f *File) Payees() ([]Payee, error) {
 	return payees, nil
 }
 
-// Account is a simple type representing an account directive. Subdirectives containing value expressions
-// are not included.
+// Account is a simple type representing an account directive.
 type Account struct {
 	Name    string   // The name of this account.
 	Note    string   // The contents of the note subdirective.
@@ -172,9 +164,7 @@ type Account struct {
 	Payees  []string // One string for each payee subdirective.
 	Default bool     // True if the default subdirective is present.
 
-	FoundBefore    int          // The transaction index this account precedes.
-	DirectiveIndex int          // The index of this account in the list of all directives. Calling File.Format may ruin this relationship.
-	Location       lex.Location // Line number where this account starts.
+	Location lex.Location // Line number where this account starts.
 }
 
 // Payee is a simple type representing a payee directive.
@@ -183,78 +173,5 @@ type Payee struct {
 	Aliases []string // One string for each regexp to match with.
 	Uuids   []string // One string for each uuid to check.
 
-	FoundBefore    int          // The transaction index this directive precedes.
-	DirectiveIndex int          // The index of this directive in the list of all directives. Calling File.Format may ruin this relationship.
-	Location       lex.Location // Line number where this directive starts.
-}
-
-// Matched finds transactions by regexp on the description, and returns a slice of found transactions
-// with postings and description modified by the first successful match from matchers. Only transactions
-// with a posting containing the given account will be modified.
-func (f *File) Matched(account string, matchers []Matcher) []Transaction {
-	outTrs := []Transaction{}
-	for _, ftr := range f.T {
-		tr := *ftr.CleanCopy()
-		if tr.Match(account, matchers) {
-			tr.KVPairs["RID"] = <-IDService
-			outTrs = append(outTrs, tr)
-		}
-	}
-	return outTrs
-}
-
-// ParseMatchers parses matchers from the directives of this ledger file.
-func (f *File) ParseMatchers() ([]Matcher, error) {
-	accounts, err := f.Accounts()
-	if err != nil {
-		return nil, err
-	}
-
-	payees, err := f.Payees()
-	if err != nil {
-		return nil, err
-	}
-
-	matchers := []Matcher{}
-
-	// fill matcher slice
-	for _, acct := range accounts {
-		account := acct.Name
-
-		pm := []Matcher{}
-		for _, reStr := range acct.Payees {
-			re, err := regexp.Compile(reStr)
-			if err != nil {
-				return nil, err
-			}
-
-			pm = append(pm, Matcher{
-				Account: account,
-				R:       re,
-			})
-		}
-
-		for _, payee := range payees {
-			for _, m := range pm {
-				if m.R.MatchString(payee.Name) {
-					for _, alias := range payee.Aliases {
-						re, err := regexp.Compile(alias)
-						if err != nil {
-							return nil, err
-						}
-
-						matchers = append(matchers, Matcher{
-							Account: account,
-							Payee:   payee.Name,
-							R:       re,
-						})
-					}
-				}
-			}
-		}
-
-		matchers = append(matchers, pm...)
-	}
-
-	return matchers, nil
+	Location lex.Location // Line number where this directive starts.
 }

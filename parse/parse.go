@@ -48,8 +48,7 @@ func ParseLedgerString(input string) (*ledger.File, error) {
 
 // ParseLedger parses a ledger from a CharReader into a File.
 func ParseLedger(cr *lex.CharReader) (*ledger.File, error) {
-	transactions := []ledger.Transaction{}
-	directives := []ledger.Directive{}
+	entries := []ledger.Entry{}
 	for !cr.EOF {
 		// Eat any leading white space, also lines that are blank.
 		cr.Eat(" \t")
@@ -67,10 +66,9 @@ func ParseLedger(cr *lex.CharReader) (*ledger.File, error) {
 
 		if !(cr.Match("0123456789") && cr.NMatch("0123456789")) {
 			// The start of this line doesn't look like a date, so it must be a directive.
-			current := ledger.Directive{
-				FoundBefore: len(transactions),
-				Location:    cr.L,
-			}
+		current := ledger.Directive{
+			Location: cr.L,
+		}
 
 			typ, err := ReadUntilTrimmed(cr, " \n")
 			if err != nil {
@@ -102,7 +100,8 @@ func ParseLedger(cr *lex.CharReader) (*ledger.File, error) {
 				current.Lines = append(current.Lines, line)
 			}
 
-			directives = append(directives, current)
+			d := current
+			entries = append(entries, &d)
 			continue
 		}
 
@@ -453,10 +452,11 @@ func ParseLedger(cr *lex.CharReader) (*ledger.File, error) {
 			current.Postings = append(current.Postings, post)
 		}
 
-		transactions = append(transactions, current)
+		t := current
+		entries = append(entries, &t)
 	}
 
-	return &ledger.File{T: transactions, D: directives}, nil
+	return &ledger.File{Entries: entries}, nil
 }
 
 func ReadAmount(cr *lex.CharReader) (v int64, null bool, err error) {
@@ -480,8 +480,11 @@ func ReadAmount(cr *lex.CharReader) (v int64, null bool, err error) {
 	// Read the numeric part of the amount
 	// This is probably shitty, and maybe wrong, but I hope not. I 1000% need to write tests for this.
 	whole := int64(0)
+	wholeD := 0
 	part := int64(0)
+	partD := 0
 	cur := &whole
+	curD := &wholeD
 	null = true
 	for cr.MatchNumeric() || cr.C == '.' || cr.C == ',' {
 		if cr.C == '.' {
@@ -490,6 +493,7 @@ func ReadAmount(cr *lex.CharReader) (v int64, null bool, err error) {
 			}
 			cr.Next()
 			cur = &part
+			curD = &partD
 			continue
 		}
 		if cr.C == ',' {
@@ -498,6 +502,7 @@ func ReadAmount(cr *lex.CharReader) (v int64, null bool, err error) {
 		}
 
 		*cur = *cur*10 + int64(cr.C-'0')
+		*curD++
 		null = false
 		cr.Next()
 		if cr.EOF {
@@ -506,15 +511,15 @@ func ReadAmount(cr *lex.CharReader) (v int64, null bool, err error) {
 	}
 	if !null {
 		whole = whole * 10000
-		if part > 9999 {
+		if partD > 4 {
 			return 0, false, ErrBadAmount(cr.L)
 		}
-		switch {
-		case part < 9:
+		switch partD {
+		case 1:
 			part = part * 1000
-		case part < 99:
+		case 2:
 			part = part * 100
-		case part < 9999:
+		case 3:
 			part = part * 10
 		}
 		v = whole + part
