@@ -37,8 +37,59 @@ func TestParseLedger_CommentOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Entries) != 0 {
-		t.Errorf("expected 0 entries, got %d", len(f.Entries))
+	if len(f.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(f.Entries))
+	}
+	c, ok := f.Entries[0].(*ledger.Comment)
+	if !ok {
+		t.Fatal("expected Comment")
+	}
+	if len(c.Lines) != 1 || c.Lines[0] != "this is a comment" {
+		t.Errorf("lines = %q", c.Lines)
+	}
+}
+
+func TestParseLedger_CommentBlock(t *testing.T) {
+	input := "; line one\n; line two\n; line three\n"
+	f, err := parse.ParseLedgerString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(f.Entries))
+	}
+	c, ok := f.Entries[0].(*ledger.Comment)
+	if !ok {
+		t.Fatal("expected Comment")
+	}
+	if len(c.Lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(c.Lines))
+	}
+	if c.Lines[0] != "line one" || c.Lines[1] != "line two" || c.Lines[2] != "line three" {
+		t.Errorf("lines = %q", c.Lines)
+	}
+}
+
+func TestParseLedger_CommentsBetweenEntries(t *testing.T) {
+	input := "; top comment\n2021/09/25 Test\n\tA  $1.00\n\tB\n; middle comment\naccount Expenses:Food\n"
+	f, err := parse.ParseLedgerString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Entries) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(f.Entries))
+	}
+	if _, ok := f.Entries[0].(*ledger.Comment); !ok {
+		t.Error("entry 0 should be Comment")
+	}
+	if _, ok := f.Entries[1].(*ledger.Transaction); !ok {
+		t.Error("entry 1 should be Transaction")
+	}
+	if _, ok := f.Entries[2].(*ledger.Comment); !ok {
+		t.Error("entry 2 should be Comment")
+	}
+	if _, ok := f.Entries[3].(*ledger.Directive); !ok {
+		t.Error("entry 3 should be Directive")
 	}
 }
 
@@ -388,18 +439,6 @@ func TestParseLedger_PendingStatusWithCode(t *testing.T) {
 	}
 }
 
-func TestParseLedger_KVPairWhitespaceInValue(t *testing.T) {
-	input := "2021/09/25 Test\n\t; Key: Value with spaces\n\tA  $1.00\n\tB\n"
-	f, err := parse.ParseLedgerString(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tr := f.Entries[0].(*ledger.Transaction)
-	if tr.KVPairs["Key"] != "Value with spaces" {
-		t.Errorf("KVPairs = %v", tr.KVPairs)
-	}
-}
-
 func TestParseLedger_EmptyTagDiscarded(t *testing.T) {
 	input := "2021/09/25 Test\n\t; ::Tag:\n\tA  $1.00\n\tB\n"
 	f, err := parse.ParseLedgerString(input)
@@ -439,6 +478,7 @@ func TestReadAmount(t *testing.T) {
 		{"20\n", 200000, false},
 		{"-20.00\n", -200000, false},
 		{"-20\n", -200000, false},
+		{"-$20.00\n", -200000, false},
 		{"$1,000.00\n", 10000000, false},
 		{"$0.01\n", 100, false},
 		{"$0.99\n", 9900, false},

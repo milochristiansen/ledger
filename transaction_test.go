@@ -464,8 +464,8 @@ func TestPosting_String(t *testing.T) {
 	t.Run("negative_value", func(t *testing.T) {
 		p := Posting{Account: "A", Value: -5000}
 		s := p.String()
-		if !regexp.MustCompile(`-\$0\.50`).MatchString(s) {
-			t.Errorf("expected -$0.50: %q", s)
+		if !regexp.MustCompile(`\$-0\.50`).MatchString(s) {
+			t.Errorf("expected $-0.50: %q", s)
 		}
 	})
 }
@@ -539,10 +539,10 @@ func TestFormatValue(t *testing.T) {
 		{100, "$0.01"},
 		{200000, "$20.00"},
 		{1234567, "$123.46"},
-		{99999999900, "$9999999.99"},
-		{-200000, "-$20.00"},
-		{-1234500, "-$123.45"},
-		{-5000, "-$0.50"},
+		{99999999900, "$9,999,999.99"},
+		{-200000, "$-20.00"},
+		{-1234500, "$-123.45"},
+		{-5000, "$-0.50"},
 	}
 
 	for _, tt := range tests {

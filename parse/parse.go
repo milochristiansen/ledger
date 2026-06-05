@@ -59,8 +59,22 @@ func ParseLedger(cr *lex.CharReader) (*ledger.File, error) {
 
 		// Consume comments that are not part of the body of a transaction.
 		if cr.C == ';' {
-			cr.EatUntil("\n")
-			cr.Next()
+			comment := ledger.Comment{}
+			for cr.C == ';' {
+				cr.Next() // skip the ';'
+				cr.Eat(" \t")
+				text := string(cr.ReadUntil("\n", nil))
+				comment.Lines = append(comment.Lines, text)
+				if cr.C == '\r' {
+					cr.Next()
+				}
+				if cr.C == '\n' {
+					cr.Next()
+				}
+				cr.Eat(" \t")
+			}
+			c := comment
+			entries = append(entries, &c)
 			continue
 		}
 
@@ -475,6 +489,14 @@ func ReadAmount(cr *lex.CharReader) (v int64, null bool, err error) {
 	if cr.C == '-' {
 		cr.Next()
 		neg = true
+		// Allow $ after - (e.g. "-$354.11")
+		if cr.C == '$' {
+			cr.Next()
+			cr.Eat(" \t")
+			if cr.EOF {
+				return 0, false, ErrUnexpectedEnd(cr.L)
+			}
+		}
 	}
 
 	// Read the numeric part of the amount

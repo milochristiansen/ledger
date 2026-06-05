@@ -38,13 +38,14 @@ package ledger
 import (
 	"bytes"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/milochristiansen/ledger/parse/lex"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 )
 
 type status int
@@ -386,22 +387,23 @@ func ParseValueNumber(v string) (int64, error) {
 	}
 	return result, nil
 }
-
 func FormatValue(v int64) string {
 	neg, ms, ls1, ls2 := formatHelper(v)
+	msStr := formatWithCommas(ms)
 	if neg {
-		return fmt.Sprintf("-$%v.%v%v", ms, ls1, ls2)
+		return fmt.Sprintf("$-%s.%v%v", msStr, ls1, ls2)
 	}
-	return fmt.Sprintf("$%v.%v%v", ms, ls1, ls2)
+	return fmt.Sprintf("$%s.%v%v", msStr, ls1, ls2)
 }
 
 // FormatValueNumber is exactly the same as FormatValue, but it does not add any currency indicators.
 func FormatValueNumber(v int64) string {
 	neg, ms, ls1, ls2 := formatHelper(v)
+	msStr := formatWithCommas(ms)
 	if neg {
-		return fmt.Sprintf("-%v.%v%v", ms, ls1, ls2)
+		return fmt.Sprintf("-%s.%v%v", msStr, ls1, ls2)
 	}
-	return fmt.Sprintf("%v.%v%v", ms, ls1, ls2)
+	return fmt.Sprintf("%s.%v%v", msStr, ls1, ls2)
 }
 
 func formatHelper(v int64) (neg bool, ms, ls1, ls2 int64) {
@@ -432,6 +434,21 @@ func roundToEven(ms, ls int64) int64 {
 	return ms
 }
 
+func formatWithCommas(v int64) string {
+	s := strconv.FormatInt(v, 10)
+	n := len(s)
+	if n <= 3 {
+		return s
+	}
+	var buf []byte
+	for i, c := range s {
+		if i > 0 && (n-i)%3 == 0 {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, byte(c))
+	}
+	return string(buf)
+}
 
 // Error types
 

@@ -1,83 +1,143 @@
-/*
-Copyright 2022 by Milo Christiansen
-
-This software is provided 'as-is', without any express or implied warranty. In
-no event will the authors be held liable for any damages arising from the use of
-this software.
-
-Permission is granted to anyone to use this software for any purpose, including
-commercial applications, and to alter it and redistribute it freely, subject to
-the following restrictions:
-
-1. The origin of this software must not be misrepresented; you must not claim
-that you wrote the original software. If you use this software in a product, an
-acknowledgment in the product documentation would be appreciated but is not
-required.
-
-2. Altered source versions must be plainly marked as such, and must not be
-misrepresented as being the original software.
-
-3. This notice may not be removed or altered from any source distribution.
-*/
-
 package tools
 
 import (
-	"bufio"
-	"encoding/csv"
-	"io"
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"fmt"
 	"os"
-	"regexp"
+	"path/filepath"
+	"time"
 
 	"github.com/milochristiansen/ledger"
 	"github.com/milochristiansen/ledger/parse"
 )
 
-// LoadLedgerFile loads a ledger file from the given path. On any error the message is logged to standard error and the
-// program exits with code 1.
-func LoadLedgerFile(path string) *ledger.File {
-	f := HandleErrV(os.Open(path))
-	defer f.Close()
-
-	lf, err := parse.ParseLedger(parse.NewRawCharReader(bufio.NewReader(f), 1))
-	HandleErr(err)
-	return lf
+type FileSafeWriter struct {
+	*ledger.File // the root file; nil until first Add
+	dir     string
+	entries []fileEntry
 }
 
-// WriteLedgerFile writes out a ledger file to the given path. On any error the message is logged to standard error
-// and the program exits with code 1.
-func WriteLedgerFile(path string, d *ledger.File) {
-	f := HandleErrV(os.Create(path))
-	defer f.Close()
-
-	HandleErr(d.Format(f))
+type fileEntry struct {
+	path string
+	orig []byte
+	file *ledger.File
 }
 
-// LoadMatchFile loads a csv match file and parses it into a list of Matchers. On any error the message is logged to
-// standard error and the program exits with code 1.
-func LoadMatchFile(path string) []Matcher {
-	mr := HandleErrV(os.Open(path))
-	defer mr.Close()
+// NewFileSafeWriter parses the ledger file at rootPath and returns a writer
+// rooted at the file's directory.
+func NewFileSafeWriter(rootPath string) (*FileSafeWriter, error) {
+	dir := filepath.Dir(rootPath)
+	base := filepath.Base(rootPath)
 
-	mrdr := csv.NewReader(mr)
-	mrdr.FieldsPerRecord = 3
-	mrdr.Comment = '#'
-
-	matchers := []Matcher{}
-	for {
-		line, err := mrdr.Read()
-		if err == io.EOF {
-			break
-		}
-		HandleErr(err)
-
-		reg := HandleErrV(regexp.Compile(line[0]))
-
-		matchers = append(matchers, Matcher{
-			R:       reg,
-			Account: line[1],
-			Payee:   line[2],
-		})
+	data, err := os.ReadFile(rootPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", rootPath, err)
 	}
-	return matchers
+	f, err := parse.ParseLedgerString(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", rootPath, err)
+	}
+
+	return &FileSafeWriter{
+		File: f,
+		dir:  dir,
+		entries: []fileEntry{{
+			path: base,
+			orig: data,
+			file: f,
+		}},
+	}, nil
+}
+
+// Add reads the file at path from disk, parses it as a ledger file, and adds it
+// to the writer. Returns the parsed file. The signature matches the callback
+// expected by ledger.File.Includes.
+func (w *FileSafeWriter) Add(path string) (*ledger.File, error) {
+	data, err := os.ReadFile(filepath.Join(w.dir, path))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	f, err := parse.ParseLedgerString(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	w.entries = append(w.entries, fileEntry{path: path, orig: data, file: f})
+	return f, nil
+}
+
+// Commit formats all loaded files, compares against the originals, and if any
+// file changed, backs up all originals to a timestamped tar.gz and writes the
+// formatted versions to disk.
+func (w *FileSafeWriter) Commit() error {
+	type formatted struct {
+		path    string
+		orig    []byte
+		new     []byte
+		changed bool
+	}
+	var fmts []formatted
+	anyChanged := false
+
+	for _, e := range w.entries {
+		var buf bytes.Buffer
+		if err := e.file.Format(&buf); err != nil {
+			return fmt.Errorf("formatting %s: %w", e.path, err)
+		}
+		fmtd := buf.Bytes()
+		changed := sha256.Sum256(e.orig) != sha256.Sum256(fmtd)
+		if changed {
+			anyChanged = true
+		}
+		fmts = append(fmts, formatted{e.path, e.orig, fmtd, changed})
+	}
+
+	if !anyChanged {
+		return nil
+	}
+
+	// Backup all originals
+	backupName := filepath.Join(w.dir, "backup-"+time.Now().Format("20060102-150405")+".tar.gz")
+	backup, err := os.Create(backupName)
+	if err != nil {
+		return fmt.Errorf("creating backup: %w", err)
+	}
+	defer backup.Close()
+
+	gw := gzip.NewWriter(backup)
+	tw := tar.NewWriter(gw)
+
+	for _, f := range fmts {
+		hdr := &tar.Header{
+			Name:    filepath.Base(f.path),
+			Size:    int64(len(f.orig)),
+			Mode:    0644,
+			ModTime: time.Now(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("writing tar header: %w", err)
+		}
+		if _, err := tw.Write(f.orig); err != nil {
+			return fmt.Errorf("writing tar entry: %w", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("closing tar: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		return fmt.Errorf("closing gzip: %w", err)
+	}
+	backup.Close()
+
+	// Write all formatted versions
+	for _, f := range fmts {
+		fullPath := filepath.Join(w.dir, f.path)
+		if err := os.WriteFile(fullPath, f.new, 0644); err != nil {
+			return fmt.Errorf("writing %s: %w", f.path, err)
+		}
+	}
+
+	return nil
 }

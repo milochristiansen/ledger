@@ -1,35 +1,13 @@
-/*
-Copyright 2021 by Milo Christiansen
-
-This software is provided 'as-is', without any express or implied warranty. In
-no event will the authors be held liable for any damages arising from the use of
-this software.
-
-Permission is granted to anyone to use this software for any purpose, including
-commercial applications, and to alter it and redistribute it freely, subject to
-the following restrictions:
-
-1. The origin of this software must not be misrepresented; you must not claim
-that you wrote the original software. If you use this software in a product, an
-acknowledgment in the product documentation would be appreciated but is not
-required.
-
-2. Altered source versions must be plainly marked as such, and must not be
-misrepresented as being the original software.
-
-3. This notice may not be removed or altered from any source distribution.
-*/
-
 package ledger
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/milochristiansen/ledger/parse/lex"
 )
-
 // Entry is a single element in a ledger file — either a *Transaction or a *Directive.
 type Entry interface {
 	String() string
@@ -41,34 +19,102 @@ type File struct {
 	Entries []Entry // each element is *Transaction or *Directive
 }
 
-// Transactions returns all transaction entries in file order.
+// walk calls fn for each entry in the file, descending into parsed include directives.
+func (f *File) walk(fn func(Entry)) {
+	for _, e := range f.Entries {
+		if d, ok := e.(*Directive); ok && d.Type == "include" {
+			if pi, ok := d.Parsed.(*Include); ok && pi.File != nil {
+				pi.File.walk(fn)
+				continue
+			}
+		}
+		fn(e)
+	}
+}
+
+// Transactions returns all transaction entries in file order, descending into includes.
 func (f *File) Transactions() []Transaction {
 	var ts []Transaction
-	for _, e := range f.Entries {
+	f.walk(func(e Entry) {
 		if t, ok := e.(*Transaction); ok {
 			ts = append(ts, *t)
 		}
-	}
+	})
 	return ts
 }
 
-// Directives returns all directive entries in file order.
+// Directives returns all directive entries in file order, descending into includes.
 func (f *File) Directives() []Directive {
 	var ds []Directive
-	for _, e := range f.Entries {
+	f.walk(func(e Entry) {
 		if d, ok := e.(*Directive); ok {
 			ds = append(ds, *d)
 		}
-	}
+	})
 	return ds
 }
 
-// Format writes out a ledger file from the entries in order.
+// Format writes out a ledger file from the entries in order. Includes are not resolved.
+// Consecutive directives of the same type are grouped without blank-line separators.
 func (f *File) Format(w io.Writer) error {
-	for _, e := range f.Entries {
-		fmt.Fprintf(w, "\n%v", e.String())
+	var prevType string
+	for i, e := range f.Entries {
+		curType := ""
+		if d, ok := e.(*Directive); ok {
+			curType = d.Type
+		}
+		sep := "\n"
+		if i > 0 && curType != "" && curType == prevType {
+			sep = ""
+		}
+		fmt.Fprintf(w, "%s%v", sep, e.String())
+		prevType = curType
 	}
 	return nil
+}
+
+// Includes processes all include directives in the file. For each, it calls load
+// with the path, storing the result as an Include in the directive's Parsed field.
+// Already-loaded includes (File != nil) are descended into recursively.
+// Errors from individual includes are collected and returned as a joined error.
+func (f *File) Includes(load func(path string) (*File, error)) ([]*Include, error) {
+	var pis []*Include
+	var errs []error
+	for _, e := range f.Entries {
+		d, ok := e.(*Directive)
+		if !ok || d.Type != "include" {
+			continue
+		}
+
+		if pi, ok := d.Parsed.(*Include); ok {
+			pis = append(pis, pi)
+			if pi.File != nil {
+				sub, err := pi.File.Includes(load)
+				if err != nil {
+					errs = append(errs, err)
+				}
+				pis = append(pis, sub...)
+			}
+			continue
+		}
+
+		pi := &Include{Path: d.Argument}
+		included, err := load(d.Argument)
+		if err != nil {
+			pi.Err = err
+			errs = append(errs, err)
+		} else {
+			pi.File = included
+			sub, err := included.Includes(load)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			pis = append(pis, sub...)
+		}
+		d.Parsed = pi
+		pis = append(pis, pi)
+	}
+	return pis, errors.Join(errs...)
 }
 
 // ErrMalformedAccountName is returned by File.Accounts if an account name is malformed.
@@ -81,14 +127,23 @@ func (err ErrMalformedAccountName) Error() string {
 	return fmt.Sprintf("Malformed account name (%s) at %s", err.Name, err.Location)
 }
 
-// Accounts returns a slice of all account directives, in file order.
+// Accounts returns a slice of all account directives, in file order, descending into includes.
 // If any account directives fail to parse, Accounts returns an error.
 func (f *File) Accounts() ([]Account, error) {
 	accts := []Account{}
-	for _, e := range f.Entries {
+	var walkErr error
+	f.walk(func(e Entry) {
+		if walkErr != nil {
+			return
+		}
 		d, ok := e.(*Directive)
 		if !ok || d.Type != "account" {
-			continue
+			return
+		}
+
+		if parsed, ok := d.Parsed.(Account); ok {
+			accts = append(accts, parsed)
+			return
 		}
 
 		acct := Account{
@@ -96,44 +151,51 @@ func (f *File) Accounts() ([]Account, error) {
 			Location: d.Location,
 		}
 
-		// filter out some things that cause funny behavior
 		if strings.Contains(acct.Name, "  ") || strings.ContainsAny(acct.Name, ";\t") {
-			return nil, ErrMalformedAccountName{acct.Name, acct.Location}
+			walkErr = ErrMalformedAccountName{acct.Name, acct.Location}
+			return
 		}
 
 		for sdiIx, sd := range d.Lines {
 			if strings.HasPrefix(sd, "default") {
 				acct.Default = true
-			} else if strings.HasPrefix(sd, "alias") {
-				alias := strings.TrimSpace(sd[len("alias"):])
+			} else if alias, ok := strings.CutPrefix(sd, "alias"); ok {
+				alias = strings.TrimSpace(alias)
 				if strings.Contains(alias, "  ") || strings.ContainsAny(alias, ";\t") {
-					return nil, ErrMalformedAccountName{
+					walkErr = ErrMalformedAccountName{
 						Name:     alias,
 						Location: acct.Location.L(acct.Location.Line() + uint64(sdiIx)),
 					}
+					return
 				}
 				acct.Aliases = append(acct.Aliases, alias)
-			} else if strings.HasPrefix(sd, "payee") {
-				payee := strings.TrimSpace(sd[len("payee"):])
+			} else if payee, ok := strings.CutPrefix(sd, "payee"); ok {
+				payee = strings.TrimSpace(payee)
 				acct.Payees = append(acct.Payees, payee)
-			} else if strings.HasPrefix(sd, "note") {
-				note := strings.TrimSpace(sd[len("note"):])
+			} else if note, ok := strings.CutPrefix(sd, "note"); ok {
+				note = strings.TrimSpace(note)
 				acct.Note = note
 			}
 		}
 
+		d.Parsed = acct
 		accts = append(accts, acct)
-	}
-	return accts, nil
+	})
+	return accts, walkErr
 }
 
-// Payees returns a slice of all payee directives, in file order.
+// Payees returns a slice of all payee directives, in file order, descending into includes.
 func (f *File) Payees() ([]Payee, error) {
 	payees := []Payee{}
-	for _, e := range f.Entries {
+	f.walk(func(e Entry) {
 		d, ok := e.(*Directive)
 		if !ok || d.Type != "account" {
-			continue
+			return
+		}
+
+		if parsed, ok := d.Parsed.(Payee); ok {
+			payees = append(payees, parsed)
+			return
 		}
 
 		payee := Payee{
@@ -142,36 +204,17 @@ func (f *File) Payees() ([]Payee, error) {
 		}
 
 		for _, sd := range d.Lines {
-			if strings.HasPrefix(sd, "alias") {
-				alias := strings.TrimSpace(sd[len("alias"):])
+			if alias, ok := strings.CutPrefix(sd, "alias"); ok {
+				alias = strings.TrimSpace(alias)
 				payee.Aliases = append(payee.Aliases, alias)
-			} else if strings.HasPrefix(sd, "uuid") {
-				uuid := strings.TrimSpace(sd[len("uuid"):])
+			} else if uuid, ok := strings.CutPrefix(sd, "uuid"); ok {
+				uuid = strings.TrimSpace(uuid)
 				payee.Uuids = append(payee.Uuids, uuid)
 			}
 		}
 
+		d.Parsed = payee
 		payees = append(payees, payee)
-	}
+	})
 	return payees, nil
-}
-
-// Account is a simple type representing an account directive.
-type Account struct {
-	Name    string   // The name of this account.
-	Note    string   // The contents of the note subdirective.
-	Aliases []string // One string for each alias subdirective.
-	Payees  []string // One string for each payee subdirective.
-	Default bool     // True if the default subdirective is present.
-
-	Location lex.Location // Line number where this account starts.
-}
-
-// Payee is a simple type representing a payee directive.
-type Payee struct {
-	Name    string   // The payee name to substitute if matched
-	Aliases []string // One string for each regexp to match with.
-	Uuids   []string // One string for each uuid to check.
-
-	Location lex.Location // Line number where this directive starts.
 }
