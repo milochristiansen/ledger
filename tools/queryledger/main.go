@@ -29,6 +29,8 @@ var (
 	excludeAcct  = flag.String("exclude-account", "", "exclude transactions with a posting matching this regex")
 	payee        = flag.String("payee", "", "only transactions whose description matches this regex")
 	excludePayee = flag.String("exclude-payee", "", "exclude transactions whose description matches this regex")
+	statusFl     = flag.String("status", "", "only transactions with this status (clear/*, pending/!, none)")
+	excludeStFl  = flag.String("exclude-status", "", "exclude transactions with this status")
 	amount       = flag.String("amount", "", "exact amount or range ($20.00 or $10.00:$30.00)")
 	asJSON       = flag.Bool("json", false, "output in JSON format")
 	csvFields    = flag.String("csv", "", "output as TSV with comma-separated fields (date, description, account, amount, account:N, amount:N, file, line, ref, status, code, clear_date)")
@@ -47,6 +49,8 @@ func main() {
 			"  -exclude-account REGEX                          exclude postings matching account\n"+
 			"  -payee REGEX                                   include matching descriptions\n"+
 			"  -exclude-payee REGEX                            exclude matching descriptions\n"+
+			"  -status clear|pending|none|*|!                   filter by transaction status\n"+
+			"  -exclude-status clear|pending|none|*|!            exclude transaction status\n"+
 			"  -amount $X.XX or $X:$Y                          exact amount or range\n"+
 			"\nref lookup mode:\n"+
 			"  -ref INDEX:HASH                                 find by ref code\n"+
@@ -333,6 +337,19 @@ func parseDateFlag(s string) (after, before time.Time, err error) {
 	return after, before, nil
 }
 
+func parseStatusFlag(s string) (int, error) {
+	switch strings.ToLower(s) {
+	case "clear", "*":
+		return int(ledger.StatusClear), nil
+	case "pending", "!":
+		return int(ledger.StatusPending), nil
+	case "none", "":
+		return int(ledger.StatusUndefined), nil
+	default:
+		return 0, fmt.Errorf("unknown status %q (use clear/*, pending/!, or none)", s)
+	}
+}
+
 func query(rootPath string) ([]queryResult, error) {
 	w, err := tools.NewFileSafeWriter(rootPath)
 	if err != nil {
@@ -356,6 +373,10 @@ func query(rootPath string) ([]queryResult, error) {
 		afterD         time.Time
 		beforeD        time.Time
 		hasDate        bool
+		statusVal      int
+		hasStatus      bool
+		excludeStVal   int
+		hasExcludeSt   bool
 	)
 	if *date != "" {
 		afterD, beforeD, err = parseDateFlag(*date)
@@ -387,6 +408,20 @@ func query(rootPath string) ([]queryResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("exclude-payee regex: %w", err)
 		}
+	}
+	if *statusFl != "" {
+		statusVal, err = parseStatusFlag(*statusFl)
+		if err != nil {
+			return nil, fmt.Errorf("status: %w", err)
+		}
+		hasStatus = true
+	}
+	if *excludeStFl != "" {
+		excludeStVal, err = parseStatusFlag(*excludeStFl)
+		if err != nil {
+			return nil, fmt.Errorf("exclude-status: %w", err)
+		}
+		hasExcludeSt = true
 	}
 	var exactAmt, minVal, maxVal int64
 	hasAmt := *amount != ""
@@ -450,6 +485,12 @@ func query(rootPath string) ([]queryResult, error) {
 				continue
 			}
 			if excludePayeeRE != nil && excludePayeeRE.MatchString(t.Description) {
+				continue
+			}
+			if hasStatus && int(t.Status) != statusVal {
+				continue
+			}
+			if hasExcludeSt && int(t.Status) == excludeStVal {
 				continue
 			}
 			if hasAmt {

@@ -186,6 +186,8 @@ func resetQueryFlags() {
 	*excludeAcct = ""
 	*payee = ""
 	*excludePayee = ""
+	*statusFl = ""
+	*excludeStFl = ""
 	*amount = ""
 }
 
@@ -349,6 +351,92 @@ func TestQuery_NoMatches(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("expected 0 results, got %d", len(results))
+	}
+}
+
+func TestQuery_StatusClear(t *testing.T) {
+	defer resetQueryFlags()
+	*statusFl = "clear"
+
+	dir := t.TempDir()
+	writeTempLedger(t, dir, "test.ledger", testLedger)
+
+	results, err := query(filepath.Join(dir, "test.ledger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 clear transaction, got %d", len(results))
+	}
+	if results[0].Entry.Description != "Groceries" {
+		t.Errorf("expected Groceries, got %s", results[0].Entry.Description)
+	}
+}
+
+func TestQuery_StatusPending(t *testing.T) {
+	defer resetQueryFlags()
+	*statusFl = "!"
+
+	dir := t.TempDir()
+	writeTempLedger(t, dir, "test.ledger", testLedger)
+
+	results, err := query(filepath.Join(dir, "test.ledger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 pending transaction, got %d", len(results))
+	}
+	if results[0].Entry.Description != "Rent" {
+		t.Errorf("expected Rent, got %s", results[0].Entry.Description)
+	}
+}
+
+func TestQuery_StatusNone(t *testing.T) {
+	defer resetQueryFlags()
+	*statusFl = "none"
+
+	dir := t.TempDir()
+	writeTempLedger(t, dir, "test.ledger", testLedger)
+
+	results, err := query(filepath.Join(dir, "test.ledger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 undefined-status transaction, got %d", len(results))
+	}
+	if results[0].Entry.Description != "Amazon" {
+		t.Errorf("expected Amazon, got %s", results[0].Entry.Description)
+	}
+}
+
+func TestQuery_ExcludeStatus(t *testing.T) {
+	defer resetQueryFlags()
+	*excludeStFl = "clear"
+
+	dir := t.TempDir()
+	writeTempLedger(t, dir, "test.ledger", testLedger)
+
+	results, err := query(filepath.Join(dir, "test.ledger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results (excluding clear), got %d", len(results))
+	}
+}
+
+func TestQuery_StatusInvalid(t *testing.T) {
+	defer resetQueryFlags()
+	*statusFl = "bogus"
+
+	dir := t.TempDir()
+	writeTempLedger(t, dir, "test.ledger", testLedger)
+
+	_, err := query(filepath.Join(dir, "test.ledger"))
+	if err == nil {
+		t.Fatal("expected error for invalid status, got nil")
 	}
 }
 
