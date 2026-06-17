@@ -70,6 +70,17 @@ func TestFileSafeWriter_Commit(t *testing.T) {
 	if len(backups) != 1 {
 		t.Fatalf("expected 1 backup, got %d", len(backups))
 	}
+
+	// Verify Commit populated the result fields
+	if !w.Changed {
+		t.Error("Changed should be true after modification")
+	}
+	if w.Backup == "" {
+		t.Error("Backup should be non-empty after modification")
+	}
+	if len(w.Files) == 0 {
+		t.Error("Files should be non-empty after commit")
+	}
 }
 
 func TestFileSafeWriter_NoChange(t *testing.T) {
@@ -109,6 +120,17 @@ func TestFileSafeWriter_NoChange(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Errorf("expected 1 backup (from canonicalization only), got %d", len(backups))
+	}
+
+	// Verify Commit result fields on no-change
+	if w2.Changed {
+		t.Error("Changed should be false when no edits")
+	}
+	if w2.Backup != "" {
+		t.Error("Backup should be empty when no changes")
+	}
+	if len(w2.Files) == 0 {
+		t.Error("Files should still be populated on no-change")
 	}
 }
 

@@ -260,10 +260,10 @@ func TestSumTransactions(t *testing.T) {
 
 func TestFormatSums(t *testing.T) {
 	accounts := map[string]int64{
-		"Expenses:Food": 100,
-		"Expenses:Rent": 200,
-		"Assets:Cash":   -300,
-		"Assets:Bank":   50,
+		"Expenses:Food":  100,
+		"Expenses:Rent":  200,
+		"Assets:Cash":    -300,
+		"Assets:Bank":    50,
 		"Liabilities:CC": -50,
 	}
 	result := FormatSums(accounts, "  ")
@@ -311,7 +311,6 @@ func TestFormatSums_Empty(t *testing.T) {
 		t.Errorf("expected empty result, got %v", result)
 	}
 }
-
 
 // ---- Transaction.String ----
 
@@ -613,7 +612,6 @@ func TestRoundToEven(t *testing.T) {
 		}
 	}
 }
-
 
 // ---- Error types ----
 

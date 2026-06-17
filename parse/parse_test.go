@@ -463,7 +463,6 @@ func TestParseLedger_TagWithTrailingSpaces(t *testing.T) {
 	}
 }
 
-
 // ---- ReadAmount ----
 
 func TestReadAmount(t *testing.T) {
@@ -503,9 +502,9 @@ func TestReadAmount(t *testing.T) {
 
 func TestReadAmount_Errors(t *testing.T) {
 	tests := []string{
-		"$.\n",         // leading decimal
-		"$0.0.0\n",     // multiple decimals
-		"$0.00000\n",   // too many fractional digits
+		"$.\n",       // leading decimal
+		"$0.0.0\n",   // multiple decimals
+		"$0.00000\n", // too many fractional digits
 	}
 	for _, input := range tests {
 		_, _, err := parse.ReadAmount(parse.NewCharReader(input, 1))
@@ -661,12 +660,12 @@ func TestParseDate(t *testing.T) {
 
 func TestParseDate_Errors(t *testing.T) {
 	tests := []string{
-		"abc\n",         // not a date
-		"2021/1/25\n",   // month not 2 digits
-		"2021/09/2\n",   // day not 2 digits
-		"20/09/25\n",    // year too short
-		"2021:09:25\n",  // wrong separator
-		"2021/09\n",     // incomplete (not enough chars for month)
+		"abc\n",        // not a date
+		"2021/1/25\n",  // month not 2 digits
+		"2021/09/2\n",  // day not 2 digits
+		"20/09/25\n",   // year too short
+		"2021:09:25\n", // wrong separator
+		"2021/09\n",    // incomplete (not enough chars for month)
 	}
 
 	for _, input := range tests {

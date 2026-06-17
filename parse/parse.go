@@ -80,9 +80,9 @@ func ParseLedger(cr *lex.CharReader) (*ledger.File, error) {
 
 		if !(cr.Match("0123456789") && cr.NMatch("0123456789")) {
 			// The start of this line doesn't look like a date, so it must be a directive.
-		current := ledger.Directive{
-			Location: cr.L,
-		}
+			current := ledger.Directive{
+				Location: cr.L,
+			}
 
 			typ, err := ReadUntilTrimmed(cr, " \n")
 			if err != nil {

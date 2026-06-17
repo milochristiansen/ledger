@@ -16,8 +16,12 @@ import (
 
 type FileSafeWriter struct {
 	*ledger.File // the root file; nil until first Add
-	dir     string
-	entries []fileEntry
+	dir          string
+	entries      []fileEntry
+	// Populated by Commit():
+	Changed bool
+	Backup  string   // backup filename only, not full path
+	Files   []string // all written file paths
 }
 
 type fileEntry struct {
@@ -94,12 +98,20 @@ func (w *FileSafeWriter) Commit() error {
 		fmts = append(fmts, formatted{e.path, e.orig, fmtd, changed})
 	}
 
+	// Populate Files list for the result, regardless of changed state.
+	w.Files = make([]string, len(fmts))
+	for i, f := range fmts {
+		w.Files[i] = f.path
+	}
+	w.Changed = anyChanged
+
 	if !anyChanged {
 		return nil
 	}
 
 	// Backup all originals
 	backupName := filepath.Join(w.dir, "backup-"+time.Now().Format("20060102-150405")+".tar.gz")
+	w.Backup = filepath.Base(backupName)
 	backup, err := os.Create(backupName)
 	if err != nil {
 		return fmt.Errorf("creating backup: %w", err)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/milochristiansen/ledger/parse/lex"
 )
+
 // Entry is a single element in a ledger file — either a *Transaction or a *Directive.
 type Entry interface {
 	String() string

@@ -17,18 +17,6 @@ go install github.com/milochristiansen/ledger/tools/editledger@latest
 go install github.com/milochristiansen/ledger/tools/fmtledger@latest
 ```
 
-Or from a local clone:
-
-```bash
-go install ./tools/...
-```
-
-To update from a local clone, `git pull` then rebuild:
-
-```bash
-go install ./tools/...
-```
-
 ## Backups
 
 `editledger` and `fmtledger` create a timestamped backup before writing changes. `queryledger` is read-only and does not.
@@ -61,6 +49,8 @@ queryledger [flags] <ledger-file>
 | `-payee` | regex (matches description) | `-payee Amazon` |
 | `-exclude-payee` | regex | `-exclude-payee 'Pizza\\|Sub'` |
 | `-amount` | exact or range (`$` optional) | `-amount '12.75'` or `-amount '-500.00:0.00'` |
+| `-status` | `clear`, `*`, `pending`, `!`, or `none` | `-status clear` or `-status '*'` |
+| `-exclude-status` | `clear`, `*`, `pending`, `!`, or `none` | `-exclude-status pending` |
 
 All flags compose with AND semantics.
 
@@ -100,6 +90,12 @@ queryledger -csv ref -date 2025/09/19 -amount '-479.24' -file 2025.ledger transa
 
 # CSV with multi-posting detail
 queryledger -csv date,description,account:0,amount:0,account:1,amount:1 -account Electronics transactions.ledger
+
+# Cleared transactions only
+queryledger -status clear -date 2025/01/01:2025/12/31 transactions.ledger
+
+# Uncategorized charges still pending
+queryledger -status pending -account Expenses:Uncategorized transactions.ledger
 ```
 
 ---
@@ -131,6 +127,7 @@ Output: the new ref for the edited transaction (print to stdout, capture for cha
 | `assert:N` | `-set 'assert:1='` | Clear assertion (empty value) |
 | `note` | `-set 'note=Kitchen supplies'` | Note on posting 0 |
 | `note:N` | `-set 'note:1=Credit card charge'` | Specific posting note |
+
 ### Adding and removing postings
 
 ```bash

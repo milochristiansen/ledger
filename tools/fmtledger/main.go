@@ -14,26 +14,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "usage: fmtledger <ledger-file>\n")
 		os.Exit(2)
 	}
-	if err := process(flag.Arg(0)); err != nil {
+	result, err := tools.Format(flag.Arg(0))
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func process(rootPath string) error {
-	w, err := tools.NewFileSafeWriter(rootPath)
-	if err != nil {
-		return err
+	if result.Changed {
+		fmt.Printf("Formatted %d files; backup: %s\n", len(result.Files), result.Backup)
+	} else {
+		fmt.Println("Already formatted — no changes.")
 	}
-
-	pis, err := w.Includes(w.Add)
-	if err != nil {
-		return fmt.Errorf("loading includes: %w", err)
-	}
-
-	if err := w.Commit(); err != nil {
-		return err
-	}
-	fmt.Printf("formatted %d files\n", len(pis)+1)
-	return nil
 }

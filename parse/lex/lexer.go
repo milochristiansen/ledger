@@ -20,7 +20,6 @@ misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 */
 
-
 // This is a greatly simplified and stripped down version of the core Lexer code that many of my parsers used for years.
 package lex
 
@@ -36,9 +35,9 @@ type CharReader struct {
 	source io.RuneReader
 
 	// The current character
-	L   Location  // Line
-	C   rune // Character
-	EOF bool // true if current C and L are invalid, at end of input
+	L   Location // Line
+	C   rune     // Character
+	EOF bool     // true if current C and L are invalid, at end of input
 
 	// The lookahead (next) character
 	NL   Location
@@ -232,7 +231,7 @@ func (l Location) String() string {
 // L is a composite constructor for a location, setting the line part. If you pass in an integer that is too
 // large to fit the 48 bit storage area, 0 will be used instead.
 func (l Location) L(i uint64) Location {
-	if uint64(i) & 0xffff000000000000 != 0 {
+	if uint64(i)&0xffff000000000000 != 0 {
 		i = 0
 	}
 	l = l & 0xffff000000000000
