@@ -120,6 +120,28 @@ type PostingJSON struct {
 	Note    string `json:"note,omitempty"`
 }
 
+// InsertPosting describes a posting to create in a new transaction.
+type InsertPosting struct {
+	Account string `json:"account"`           // required
+	Amount  string `json:"amount,omitempty"`  // "$20.00"; empty = null posting
+	Note    string `json:"note,omitempty"`
+	Assert  string `json:"assert,omitempty"` // "$20.00"
+	Status  string `json:"status,omitempty"` // "clear"|"*"|"pending"|"!"
+}
+
+// InsertSpec describes a complete new transaction to create.
+type InsertSpec struct {
+	Date        string            `json:"date"`                 // required, "2006/01/02"
+	Description string            `json:"description"`           // required
+	ClearDate   string            `json:"clear_date,omitempty"` // "2006/01/02"
+	Status      string            `json:"status,omitempty"`     // "clear"|"*"|"pending"|"!"
+	Code        string            `json:"code,omitempty"`
+	Comment     string            `json:"comment,omitempty"` // single comment line
+	Tags        []string          `json:"tags,omitempty"`    // tag names
+	KV          map[string]string `json:"kv,omitempty"`      // key-value pairs
+	Postings    []InsertPosting   `json:"postings"`          // at least 1 required
+}
+
 // FormatResult describes the result of a Format operation.
 type FormatResult struct {
 	Changed bool     `json:"changed"`
@@ -744,6 +766,195 @@ found:
 	return fmt.Sprintf("%d:%s", index, makeRef(targetPath, index, target)), nil
 }
 
+// Insert creates a new transaction in the ledger tree rooted at rootPath.
+// targetFile names the target ledger file basename; empty means root file.
+// beforeRef and afterRef position the new transaction relative to an existing
+// one; both empty appends to the end. Mutually exclusive.
+// Returns the new ref ("N:hash"). Creates a backup tar.gz before writing.
+func Insert(rootPath, targetFile, beforeRef, afterRef string, spec InsertSpec) (string, error) {
+	if beforeRef != "" && afterRef != "" {
+		return "", fmt.Errorf("before_ref and after_ref are mutually exclusive")
+	}
+	if spec.Date == "" {
+		return "", fmt.Errorf("date is required")
+	}
+	if spec.Description == "" {
+		return "", fmt.Errorf("description is required")
+	}
+	if len(spec.Postings) == 0 {
+		return "", fmt.Errorf("at least one posting required")
+	}
+
+	d, err := time.Parse("2006/01/02", spec.Date)
+	if err != nil {
+		return "", err
+	}
+
+	w, err := NewFileSafeWriter(rootPath)
+	if err != nil {
+		return "", err
+	}
+	pis, err := w.Includes(w.Add)
+	if err != nil {
+		return "", err
+	}
+	files := []lfEntry{{filepath.Base(rootPath), w.File}}
+	for _, pi := range pis {
+		if pi.File != nil {
+			files = append(files, lfEntry{pi.Path, pi.File})
+		}
+	}
+
+	var targetFE *lfEntry
+	if targetFile == "" {
+		targetFE = &files[0]
+	} else {
+		for i := range files {
+			if files[i].path == targetFile {
+				targetFE = &files[i]
+				break
+			}
+		}
+		if targetFE == nil {
+			avail := make([]string, len(files))
+			for i, fe := range files {
+				avail[i] = fe.path
+			}
+			return "", fmt.Errorf("target file %q not found; available: %s", targetFile, strings.Join(avail, ", "))
+		}
+	}
+
+	// Build the new transaction
+	t := ledger.Transaction{
+		Date:        d,
+		Description: spec.Description,
+		Comments:    make([]string, 0),
+	}
+	if spec.Comment != "" {
+		t.Comments = append(t.Comments, spec.Comment)
+	}
+
+	if spec.ClearDate != "" {
+		cd, err := time.Parse("2006/01/02", spec.ClearDate)
+		if err != nil {
+			return "", err
+		}
+		t.ClearDate = cd
+	}
+
+	switch spec.Status {
+	case "clear", "*":
+		t.Status = ledger.StatusClear
+	case "pending", "!":
+		t.Status = ledger.StatusPending
+	case "":
+	default:
+		return "", fmt.Errorf("invalid status: %s", spec.Status)
+	}
+
+	if spec.Code != "" {
+		t.Code = spec.Code
+	}
+
+	for _, tag := range spec.Tags {
+		if t.Tags == nil {
+			t.Tags = map[string]bool{}
+		}
+		t.Tags[tag] = true
+	}
+
+	if len(spec.KV) > 0 {
+		t.KVPairs = make(map[string]string, len(spec.KV))
+		for k, v := range spec.KV {
+			t.KVPairs[k] = v
+		}
+	}
+
+	t.Postings = make([]ledger.Posting, len(spec.Postings))
+	for i, ip := range spec.Postings {
+		if ip.Account == "" {
+			return "", fmt.Errorf("account is required for posting %d", i)
+		}
+		p := ledger.Posting{Account: ip.Account, Null: true}
+		if ip.Amount != "" {
+			v, null, err := parse.ReadAmount(parse.NewCharReader(ip.Amount+"\n", 1))
+			if err != nil {
+				return "", err
+			}
+			if !null {
+				p.Value = v
+				p.Null = false
+			}
+		}
+		if ip.Note != "" {
+			p.Note = ip.Note
+		}
+		if ip.Assert != "" {
+			v, null, err := parse.ReadAmount(parse.NewCharReader(ip.Assert+"\n", 1))
+			if err != nil {
+				return "", err
+			}
+			if !null {
+				p.Assert = v
+				p.HasAssert = true
+			}
+		}
+		switch ip.Status {
+		case "clear", "*":
+			p.Status = ledger.StatusClear
+		case "pending", "!":
+			p.Status = ledger.StatusPending
+		case "":
+		default:
+			return "", fmt.Errorf("invalid posting status: %s", ip.Status)
+		}
+		t.Postings[i] = p
+	}
+
+	// Determine insertion position
+	var pos int
+	if beforeRef == "" && afterRef == "" {
+		pos = len(targetFE.f.Entries)
+	} else if beforeRef != "" {
+		offset := -1
+		for _, fe := range files {
+			if offset = findEntryIndex(fe, beforeRef); offset >= 0 {
+				break
+			}
+		}
+		if offset < 0 {
+			return "", fmt.Errorf("transaction not found for before_ref: %s", beforeRef)
+		}
+		pos = offset
+	} else {
+		offset := -1
+		for _, fe := range files {
+			if offset = findEntryIndex(fe, afterRef); offset >= 0 {
+				break
+			}
+		}
+		if offset < 0 {
+			return "", fmt.Errorf("transaction not found for after_ref: %s", afterRef)
+		}
+		pos = offset + 1
+	}
+
+	// Insert into entries slice
+	targetFE.f.Entries = append(targetFE.f.Entries, nil)
+	copy(targetFE.f.Entries[pos+1:], targetFE.f.Entries[pos:])
+	targetFE.f.Entries[pos] = &t
+
+	// Mark the file as changed
+	w.Changed = true
+
+	if err := w.Commit(); err != nil {
+		return "", err
+	}
+
+	hash := makeRef(targetFE.path, pos, &t)
+	return fmt.Sprintf("%d:%s", pos, hash), nil
+}
+
 // Format standardizes formatting of all ledger files in the tree rooted
 // at rootPath. Creates a backup tar.gz if any file changed.
 func Format(rootPath string) (FormatResult, error) {
@@ -978,6 +1189,36 @@ func findInFile(fe lfEntry, index int, hash string) (*ledger.Transaction, bool) 
 		}
 	}
 	return nil, false
+}
+
+// findEntryIndex returns the actual Entry slice offset of the transaction
+// identified by ref (index:hash) within fe. Returns -1 if not found.
+func findEntryIndex(fe lfEntry, ref string) int {
+	colon := strings.LastIndex(ref, ":")
+	if colon < 0 {
+		return -1
+	}
+	index, err := strconv.Atoi(ref[:colon])
+	if err != nil {
+		return -1
+	}
+	hash := ref[colon+1:]
+	n := len(fe.f.Entries)
+	for radius := 0; radius <= n; radius++ {
+		for _, offset := range [2]int{index - radius, index + radius} {
+			if offset < 0 || offset >= n {
+				continue
+			}
+			t, ok := fe.f.Entries[offset].(*ledger.Transaction)
+			if !ok {
+				continue
+			}
+			if makeRef(fe.path, offset, t) == hash {
+				return offset
+			}
+		}
+	}
+	return -1
 }
 
 func applyEdit(t *ledger.Transaction, spec EditSpec) error {

@@ -123,6 +123,40 @@ func main() {
 	)
 	s.AddTool(editTool, handleEdit)
 
+	// --- ledger_insert ---
+	insertTool := mcp.NewTool("ledger_insert",
+		mcp.WithDescription("Insert a new transaction into the ledger. Creates a backup before writing."),
+		mcp.WithString("root_path", mcp.Required(), mcp.Description("Path to the root ledger file")),
+		mcp.WithString("target_file", mcp.Description("Target file basename; defaults to root file")),
+		mcp.WithString("before_ref", mcp.Description("Insert before this transaction ref; exclusive with after_ref")),
+		mcp.WithString("after_ref", mcp.Description("Insert after this transaction ref; exclusive with before_ref")),
+		mcp.WithString("date", mcp.Required(), mcp.Description("Transaction date: YYYY/MM/DD")),
+		mcp.WithString("description", mcp.Required(), mcp.Description("Payee/description")),
+		mcp.WithString("clear_date", mcp.Description("Clearance date: YYYY/MM/DD")),
+		mcp.WithString("status", mcp.Description("Status: clear, *, pending, or !")),
+		mcp.WithString("code", mcp.Description("Transaction code")),
+		mcp.WithString("comment", mcp.Description("Single comment line")),
+		mcp.WithArray("tags", mcp.Description("Tag names"), mcp.Items(map[string]any{"type": "string"})),
+		mcp.WithAny("kv", mcp.Description("Key-value pairs as a JSON object")),
+		mcp.WithArray("postings",
+			mcp.Required(),
+			mcp.Description("Postings for the new transaction (at least one required)"),
+			mcp.Items(map[string]any{
+				"type":     "object",
+				"required": []any{"account"},
+				"properties": map[string]any{
+					"account": map[string]any{"type": "string"},
+					"amount":  map[string]any{"type": "string"},
+					"note":    map[string]any{"type": "string"},
+					"assert":  map[string]any{"type": "string"},
+					"status":  map[string]any{"type": "string", "enum": []any{"clear", "*", "pending", "!"}},
+				},
+			}),
+		),
+		mcp.WithOutputSchema[tools.EditResult](),
+	)
+	s.AddTool(insertTool, handleInsert)
+
 	// --- ledger_format ---
 	formatTool := mcp.NewTool("ledger_format",
 		mcp.WithDescription("Standardize formatting of all ledger files in the tree. Creates a backup if files changed."),
@@ -208,6 +242,50 @@ func handleEdit(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 	}
 
 	newRef, err := tools.Edit(args.RootPath, args.Ref, args.ScopeFile, args.EditSpec)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	result, err := tools.QueryByRef(args.RootPath, newRef, "")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	tj := tools.NewTransactionJSON(result)
+	editResult := tools.EditResult{Ref: newRef, Transaction: tj}
+	return mcp.NewToolResultStructuredOnly(editResult), nil
+}
+
+// insertArgs merges routing fields with all InsertSpec fields.
+type insertArgs struct {
+	RootPath   string `json:"root_path"`
+	TargetFile string `json:"target_file,omitempty"`
+	BeforeRef  string `json:"before_ref,omitempty"`
+	AfterRef   string `json:"after_ref,omitempty"`
+	tools.InsertSpec
+}
+
+func handleInsert(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args insertArgs
+	if err := request.BindArguments(&args); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+	if args.RootPath == "" {
+		return mcp.NewToolResultError("root_path is required"), nil
+	}
+	if args.BeforeRef != "" && args.AfterRef != "" {
+		return mcp.NewToolResultError("before_ref and after_ref are mutually exclusive"), nil
+	}
+	if args.Date == "" {
+		return mcp.NewToolResultError("date is required"), nil
+	}
+	if args.Description == "" {
+		return mcp.NewToolResultError("description is required"), nil
+	}
+	if len(args.Postings) == 0 {
+		return mcp.NewToolResultError("at least one posting required"), nil
+	}
+
+	newRef, err := tools.Insert(args.RootPath, args.TargetFile, args.BeforeRef, args.AfterRef, args.InsertSpec)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
